@@ -119,16 +119,6 @@ func BenchmarkDecimal_RoundCash_Five(b *testing.B) {
 	}
 }
 
-func BenchmarkDecimal_RoundCash_Fifteen(b *testing.B) {
-	const want = "6.30"
-	for i := 0; i < b.N; i++ {
-		val := New(635, -2)
-		if have := val.StringFixedCash(15); have != want {
-			b.Fatalf("\nHave: %q\nWant: %q", have, want)
-		}
-	}
-}
-
 func Benchmark_Cmp(b *testing.B) {
 	decimals := DecimalSlice([]Decimal{})
 	for i := 0; i < 1000000; i++ {
@@ -181,5 +171,15 @@ func Benchmark_decimal_Decimal_Sub_same_precision(b *testing.B) {
 	b.StartTimer()
 	for i := 0; i < b.N; i++ {
 		d1.Add(d2)
+	}
+}
+
+func BenchmarkDecimal_IsInteger(b *testing.B) {
+	d := RequireFromString("12.000")
+
+	b.ReportAllocs()
+	b.StartTimer()
+	for i := 0; i < b.N; i++ {
+		d.IsInteger()
 	}
 }

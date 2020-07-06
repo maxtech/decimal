@@ -1,11 +1,5 @@
 // Package decimal implements an arbitrary precision fixed-point decimal.
 //
-// To use as part of a struct:
-//
-//     type Struct struct {
-//         Number Decimal
-//     }
-//
 // The zero-value of a Decimal is 0, as you would expect.
 //
 // The best way to create a new Decimal is to use decimal.NewFromString, ex:
@@ -13,8 +7,13 @@
 //     n, err := decimal.NewFromString("-123.4567")
 //     n.String() // output: "-123.4567"
 //
-// NOTE: This can "only" represent numbers with a maximum of 2^31 digits
-// after the decimal point.
+// To use Decimal as part of a struct:
+//
+//     type Struct struct {
+//         Number Decimal
+//     }
+//
+// Note: This can "only" represent numbers with a maximum of 2^31 digits after the decimal point.
 package decimal
 
 import (
@@ -32,14 +31,14 @@ import (
 //
 // Example:
 //
-//     d1 := decimal.NewFromFloat(2).Div(decimal.NewFromFloat(3)
+//     d1 := decimal.NewFromFloat(2).Div(decimal.NewFromFloat(3))
 //     d1.String() // output: "0.6666666666666667"
-//     d2 := decimal.NewFromFloat(2).Div(decimal.NewFromFloat(30000)
+//     d2 := decimal.NewFromFloat(2).Div(decimal.NewFromFloat(30000))
 //     d2.String() // output: "0.0000666666666667"
-//     d3 := decimal.NewFromFloat(20000).Div(decimal.NewFromFloat(3)
+//     d3 := decimal.NewFromFloat(20000).Div(decimal.NewFromFloat(3))
 //     d3.String() // output: "6666.6666666666666667"
 //     decimal.DivisionPrecision = 3
-//     d4 := decimal.NewFromFloat(2).Div(decimal.NewFromFloat(3)
+//     d4 := decimal.NewFromFloat(2).Div(decimal.NewFromFloat(3))
 //     d4.String() // output: "0.667"
 //
 var DivisionPrecision = 16
@@ -53,10 +52,8 @@ var DivisionPrecision = 16
 var MarshalJSONWithoutQuotes = false
 
 // Zero constant, to make computations faster.
+// Zero should never be compared with == or != directly, please use decimal.Equal or decimal.Cmp instead.
 var Zero = New(0, 1)
-
-// fiveDec used in Cash Rounding
-var fiveDec = New(5, 0)
 
 var zeroInt = big.NewInt(0)
 var oneInt = big.NewInt(1)
@@ -122,11 +119,13 @@ func NewFromBigInt(value *big.Int, exp int32) Decimal {
 }
 
 // NewFromString returns a new Decimal from a string representation.
+// Trailing zeroes are not trimmed.
 //
 // Example:
 //
 //     d, err := NewFromString("-123.45")
 //     d2, err := NewFromString(".0001")
+//     d3, err := NewFromString("1.47000")
 //
 func NewFromString(value string) (Decimal, error) {
 	originalInput := value
@@ -153,13 +152,8 @@ func NewFromString(value string) (Decimal, error) {
 		// an int
 		intString = value
 	} else if len(parts) == 2 {
-		// strip the insignificant digits for more accurate comparisons.
-		decimalPart := strings.TrimRight(parts[1], "0")
-		intString = parts[0] + decimalPart
-		if intString == "" && parts[1] != "" {
-			intString = "0"
-		}
-		expInt := -len(decimalPart)
+		intString = parts[0] + parts[1]
+		expInt := -len(parts[1])
 		exp += int64(expInt)
 	} else {
 		return Decimal{}, fmt.Errorf("can't convert %s to decimal: too many .s", value)
@@ -215,7 +209,7 @@ func NewFromFloat(value float64) Decimal {
 	return newFromFloat(value, math.Float64bits(value), &float64info)
 }
 
-// NewFromFloat converts a float32 to Decimal.
+// NewFromFloat32 converts a float32 to Decimal.
 //
 // The converted number will contain the number of significant digits that can be
 // represented in a float with reliable roundtrip.
@@ -301,10 +295,9 @@ func NewFromFloatWithExponent(value float64, exp int32) Decimal {
 		// specials
 		if mant == 0 {
 			return Decimal{}
-		} else {
-			// subnormal
-			exp2++
 		}
+		// subnormal
+		exp2++
 	} else {
 		// normal
 		mant |= 1 << 52
@@ -590,6 +583,33 @@ func (d Decimal) Pow(d2 Decimal) Decimal {
 	return temp.Mul(temp).Div(d)
 }
 
+// IsInteger returns true when decimal can be represented as an integer value, otherwise, it returns false.
+func (d Decimal) IsInteger() bool {
+	// The most typical case, all decimal with exponent higher or equal 0 can be represented as integer
+	if d.exp >= 0 {
+		return true
+	}
+	// When the exponent is negative we have to check every number after the decimal place
+	// If all of them are zeroes, we are sure that given decimal can be represented as an integer
+	var r big.Int
+	q := big.NewInt(0).Set(d.value)
+	for z := abs(d.exp); z > 0; z-- {
+		q.QuoRem(q, tenInt, &r)
+		if r.Cmp(zeroInt) != 0 {
+			return false
+		}
+	}
+	return true
+}
+
+// Abs calculates absolute value of any int32. Used for calculating absolute value of decimal's exponent.
+func abs(n int32) int32 {
+	if n < 0 {
+		return -n
+	}
+	return n
+}
+
 // Cmp compares the numbers represented by d and d2 and returns:
 //
 //     -1 if d <  d2
@@ -700,6 +720,22 @@ func (d Decimal) IntPart() int64 {
 	return scaledD.value.Int64()
 }
 
+// BigInt returns integer component of the decimal as a BigInt.
+func (d Decimal) BigInt() *big.Int {
+	scaledD := d.rescale(0)
+	i := &big.Int{}
+	i.SetString(scaledD.String(), 10)
+	return i
+}
+
+// BigFloat returns decimal as BigFloat.
+// Be aware that casting decimal to BigFloat might cause a loss of precision.
+func (d Decimal) BigFloat() *big.Float {
+	f := &big.Float{}
+	f.SetString(d.String())
+	return f
+}
+
 // Rat returns a rational number representation of the decimal.
 func (d Decimal) Rat() *big.Rat {
 	d.ensureInitialized()
@@ -760,13 +796,13 @@ func (d Decimal) StringFixed(places int32) string {
 //
 // Example:
 //
-// 	   NewFromFloat(0).StringFixed(2) // output: "0.00"
-// 	   NewFromFloat(0).StringFixed(0) // output: "0"
-// 	   NewFromFloat(5.45).StringFixed(0) // output: "5"
-// 	   NewFromFloat(5.45).StringFixed(1) // output: "5.4"
-// 	   NewFromFloat(5.45).StringFixed(2) // output: "5.45"
-// 	   NewFromFloat(5.45).StringFixed(3) // output: "5.450"
-// 	   NewFromFloat(545).StringFixed(-1) // output: "550"
+// 	   NewFromFloat(0).StringFixedBank(2) // output: "0.00"
+// 	   NewFromFloat(0).StringFixedBank(0) // output: "0"
+// 	   NewFromFloat(5.45).StringFixedBank(0) // output: "5"
+// 	   NewFromFloat(5.45).StringFixedBank(1) // output: "5.4"
+// 	   NewFromFloat(5.45).StringFixedBank(2) // output: "5.45"
+// 	   NewFromFloat(5.45).StringFixedBank(3) // output: "5.450"
+// 	   NewFromFloat(545).StringFixedBank(-1) // output: "540"
 //
 func (d Decimal) StringFixedBank(places int32) string {
 	rounded := d.RoundBank(places)
@@ -844,10 +880,9 @@ func (d Decimal) RoundBank(places int32) Decimal {
 // RoundCash aka Cash/Penny/öre rounding rounds decimal to a specific
 // interval. The amount payable for a cash transaction is rounded to the nearest
 // multiple of the minimum currency unit available. The following intervals are
-// available: 5, 10, 15, 25, 50 and 100; any other number throws a panic.
+// available: 5, 10, 25, 50 and 100; any other number throws a panic.
 //	    5:   5 cent rounding 3.43 => 3.45
 // 	   10:  10 cent rounding 3.45 => 3.50 (5 gets rounded up)
-// 	   15:  10 cent rounding 3.45 => 3.40 (5 gets rounded down)
 // 	   25:  25 cent rounding 3.41 => 3.50
 // 	   50:  50 cent rounding 3.75 => 4.00
 // 	  100: 100 cent rounding 3.50 => 4.00
@@ -859,20 +894,6 @@ func (d Decimal) RoundCash(interval uint8) Decimal {
 		iVal = twentyInt
 	case 10:
 		iVal = tenInt
-	case 15:
-		if d.exp < 0 {
-			// TODO: optimize and reduce allocations
-			orgExp := d.exp
-			dOne := New(10^-int64(orgExp), orgExp)
-			d2 := d
-			d2.exp = 0
-			if d2.Mod(fiveDec).Equal(Zero) {
-				d2.exp = orgExp
-				d2 = d2.Sub(dOne)
-				d = d2
-			}
-		}
-		iVal = tenInt
 	case 25:
 		iVal = fourInt
 	case 50:
@@ -880,11 +901,12 @@ func (d Decimal) RoundCash(interval uint8) Decimal {
 	case 100:
 		iVal = oneInt
 	default:
-		panic(fmt.Sprintf("Decimal does not support this Cash rounding interval `%d`. Supported: 5, 10, 15, 25, 50, 100", interval))
+		panic(fmt.Sprintf("Decimal does not support this Cash rounding interval `%d`. Supported: 5, 10, 25, 50, 100", interval))
 	}
 	dVal := Decimal{
 		value: iVal,
 	}
+
 	// TODO: optimize those calculations to reduce the high allocations (~29 allocs).
 	return d.Mul(dVal).Round(0).Div(dVal).Truncate(2)
 }
@@ -950,13 +972,13 @@ func (d *Decimal) UnmarshalJSON(decimalBytes []byte) error {
 
 	str, err := unquoteIfQuoted(decimalBytes)
 	if err != nil {
-		return fmt.Errorf("Error decoding string '%s': %s", decimalBytes, err)
+		return fmt.Errorf("error decoding string '%s': %s", decimalBytes, err)
 	}
 
 	decimal, err := NewFromString(str)
 	*d = decimal
 	if err != nil {
-		return fmt.Errorf("Error decoding string '%s': %s", str, err)
+		return fmt.Errorf("error decoding string '%s': %s", str, err)
 	}
 	return nil
 }
@@ -1044,7 +1066,7 @@ func (d *Decimal) UnmarshalText(text []byte) error {
 	dec, err := NewFromString(str)
 	*d = dec
 	if err != nil {
-		return fmt.Errorf("Error decoding string '%s': %s", str, err)
+		return fmt.Errorf("error decoding string '%s': %s", str, err)
 	}
 
 	return nil
@@ -1174,7 +1196,7 @@ func Avg(first Decimal, rest ...Decimal) Decimal {
 	return sum.Div(count)
 }
 
-// Rescale two decimals to common exponential value (minimal exp of both decimals)
+// RescalePair rescales two decimals to common exponential value (minimal exp of both decimals)
 func RescalePair(d1 Decimal, d2 Decimal) (Decimal, Decimal) {
 	d1.ensureInitialized()
 	d2.ensureInitialized()
@@ -1206,7 +1228,7 @@ func unquoteIfQuoted(value interface{}) (string, error) {
 	case []byte:
 		bytes = v
 	default:
-		return "", fmt.Errorf("Could not convert value '%+v' to byte array of type '%T'",
+		return "", fmt.Errorf("could not convert value '%+v' to byte array of type '%T'",
 			value, value)
 	}
 
@@ -1263,14 +1285,14 @@ func (d NullDecimal) MarshalJSON() ([]byte, error) {
 // Trig functions
 
 // Atan returns the arctangent, in radians, of x.
-func (x Decimal) Atan() Decimal {
-	if x.Equal(NewFromFloat(0.0)) {
-		return x
+func (d Decimal) Atan() Decimal {
+	if d.Equal(NewFromFloat(0.0)) {
+		return d
 	}
-	if x.GreaterThan(NewFromFloat(0.0)) {
-		return x.satan()
+	if d.GreaterThan(NewFromFloat(0.0)) {
+		return d.satan()
 	}
-	return x.Neg().satan().Neg()
+	return d.Neg().satan().Neg()
 }
 
 func (d Decimal) xatan() Decimal {
